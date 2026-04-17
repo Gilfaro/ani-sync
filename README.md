@@ -10,9 +10,9 @@
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 <br>
-[![Windows Build](https://img.shields.io/badge/build-Windows-success?logo=windows&logoColor=white)](https://github.com/Gilfar/ani-sync/releases)
-[![macOS Build](https://img.shields.io/badge/build-macOS-success?logo=apple&logoColor=white)](https://github.com/Gilfar/ani-sync/releases)
-[![Linux Build](https://img.shields.io/badge/build-Linux-success?logo=linux&logoColor=white)](https://github.com/Gilfar/ani-sync/releases)
+[![Windows Build](https://img.shields.io/badge/build-Windows-success?logo=windows&logoColor=white)](https://github.com/Gilfaro/ani-sync/releases)
+[![macOS Build](https://img.shields.io/badge/build-macOS-success?logo=apple&logoColor=white)](https://github.com/Gilfaro/ani-sync/releases)
+[![Linux Build](https://img.shields.io/badge/build-Linux-success?logo=linux&logoColor=white)](https://github.com/Gilfaro/ani-sync/releases)
 
 Ani-Sync is a high-performance, non-destructive CLI tool designed for power users who want to keep their MyAnimeList, AniList, Kitsu, and MangaBaka accounts in perfect harmony.
 

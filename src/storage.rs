@@ -236,7 +236,7 @@ mod tests {
         let bundle = TokenBundle {
             access_token: "access_123".to_string(),
             refresh_token: Some("refresh_123".to_string()),
-            expires_at: Some(1234567890),
+            expires_at: Some(1_234_567_890),
         };
 
         let _ = delete_secret(account);

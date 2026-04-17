@@ -333,7 +333,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             repeat: 0,
-            notes: "".to_string(),
+            notes: String::new(),
             max_progress: 12,
             max_volumes: 0,
         };
@@ -372,7 +372,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             repeat: 0,
-            notes: "".to_string(),
+            notes: String::new(),
             max_progress: 12,
             max_volumes: 0,
         };

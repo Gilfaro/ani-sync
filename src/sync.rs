@@ -486,7 +486,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             repeat: 0,
-            notes: "".to_string(),
+            notes: String::new(),
             max_progress: 12,
             max_volumes: 0,
         }
@@ -576,7 +576,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             repeat: 0,
-            notes: "".to_string(),
+            notes: String::new(),
         };
 
         let result = SyncResult {
@@ -613,7 +613,9 @@ mod tests {
             }
             fn get_round_trip_score(&self, internal_score: i32) -> i32 {
                 // Simulate Kitsu rounding: (score / 5).round() * 5
-                (internal_score as f32 / 5.0).round() as i32 * 5
+                #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                let s = (internal_score as f32 / 5.0).round() as i32 * 5;
+                s
             }
             async fn get_viewer_name(&self) -> color_eyre::Result<String> {
                 Ok("test".to_string())
@@ -691,6 +693,7 @@ mod tests {
                 true
             }
             fn get_round_trip_score(&self, internal_score: i32) -> i32 {
+                #[expect(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let mut score_val = if internal_score == 0 {
                     0
                 } else {
