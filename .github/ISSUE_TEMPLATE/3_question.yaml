@@ -1,0 +1,26 @@
+name: Question
+description: Ask a question about ani-sync
+labels: ["question"]
+body:
+  - type: textarea
+    attributes:
+      label: Question
+      description: Describe your question in detail.
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Platform
+      description: What operating system and architecture are you using? (see `uname -orsm`)
+      placeholder: e.g., macOS 14 arm64, Windows 11 x86_64, Ubuntu 20.04 amd64
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: Version
+      description: What version of ani-sync are you using? (see `ani-sync --version`)
+      placeholder: e.g., ani_sync 0.1.0
+    validations:
+      required: false

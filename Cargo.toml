@@ -1,0 +1,77 @@
+[package]
+name = "ani_sync"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anstream = "1.0.0"
+async-trait = "0.1.89"
+axum = "0.8.9"
+base64 = "0.22.1"
+chrono = "0.4.44"
+clap = { version = "4.6.1", features = ["derive"] }
+color-eyre = "0.6.5"
+keyring = { version = "3.6.3", features = ["windows-native", "apple-native", "linux-native"] }
+owo-colors = "4.3.0"
+rand = "0.10.1"
+reqwest = { version = "0.13.2", features = ["form", "json", "gzip", "deflate", "zstd"] }
+rpassword = "7.4.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+tabled = { version = "0.20.0", features = ["ansi"] }
+terminal_size = "0.4.4"
+tokio = { version = "1.52.1", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2.5.8"
+webbrowser = "1.2.1"
+
+[dev-dependencies]
+mockito = "1.7.2"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -2 }
+# Allowed pedantic lints
+char_lit_as_u8 = "allow"
+collapsible_else_if = "allow"
+collapsible_if = "allow"
+implicit_hasher = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+used_underscore_binding = "allow"
+# Disallowed restriction lints
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+empty_drop = "warn"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+get_unwrap = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+if_not_else = "allow"
+use_self = "warn"
+
+# Diagnostics are not actionable: Enable once https://github.com/rust-lang/rust-clippy/issues/13774 is resolved.
+large_stack_arrays = "allow"
+
+[profile.release]
+strip = true
+lto = "fat"
+
+[profile.dist]
+inherits = "release"

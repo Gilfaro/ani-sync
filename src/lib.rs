@@ -1,0 +1,11 @@
+pub mod anilist;
+pub mod auth;
+pub mod cli;
+pub mod client;
+pub mod kitsu;
+pub mod mal;
+pub mod mangabaka;
+pub mod models;
+pub mod storage;
+pub mod sync;
+pub mod ui;
