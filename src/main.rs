@@ -80,9 +80,12 @@ async fn main() -> Result<()> {
                         let query: std::collections::HashMap<_, _> =
                             parsed_url.query_pairs().into_owned().collect();
 
-                        if let Some(state) = query.get("state")
-                            && !oauth.verify_state(state)
-                        {
+                        let Some(state) = query.get("state") else {
+                            print_error("Authorization state missing! Possible CSRF attack.");
+                            return Ok(());
+                        };
+
+                        if !oauth.verify_state(state) {
                             print_error("Authorization state mismatch! Possible CSRF attack.");
                             return Ok(());
                         }
@@ -194,6 +197,17 @@ async fn main() -> Result<()> {
                             url::Url::parse(&format!("http://localhost{callback_path}")).unwrap();
                         let query: std::collections::HashMap<_, _> =
                             parsed_url.query_pairs().into_owned().collect();
+
+                        let Some(state) = query.get("state") else {
+                            print_error("Authorization state missing! Possible CSRF attack.");
+                            return Ok(());
+                        };
+
+                        if !oauth.verify_state(state) {
+                            print_error("Authorization state mismatch! Possible CSRF attack.");
+                            return Ok(());
+                        }
+
                         if let Some(code) = query.get("code") {
                             if oauth.exchange_token(code).await.is_ok() {
                                 print_success("MangaBaka authorization successful!");

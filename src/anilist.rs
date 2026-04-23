@@ -9,6 +9,7 @@ use std::time::Duration;
 
 const ANILIST_CLIENT_ID: &str = "38728";
 const ANILIST_BASE_URL: &str = "https://graphql.anilist.co";
+const ANILIST_OAUTH_AUTHORIZE_URL: &str = "https://anilist.co/api/v2/oauth/authorize";
 
 const ANILIST_COLLECTION_QUERY: &str = r"
 query ($userName: String, $type: MediaType) {
@@ -565,9 +566,7 @@ pub struct AniListOAuth;
 #[async_trait]
 impl OAuthProvider for AniListOAuth {
     fn get_auth_url(&self) -> String {
-        format!(
-            "https://anilist.co/api/v2/oauth/authorize?client_id={ANILIST_CLIENT_ID}&response_type=token"
-        )
+        format!("{ANILIST_OAUTH_AUTHORIZE_URL}?client_id={ANILIST_CLIENT_ID}&response_type=token")
     }
 
     async fn exchange_token(&self, code: &str) -> Result<()> {

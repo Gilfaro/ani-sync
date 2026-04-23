@@ -41,7 +41,7 @@ Ani-Sync is a high-performance, non-destructive CLI tool designed for power user
 ### Pre-built Binaries (Recommended)
 
 Ready-to-use executables for **Windows**, **macOS**, and **Linux** are automatically built via CI/CD. 
-You can grab the latest version from the [Releases](https://github.com/Gilfar/ani-sync/releases) page.
+You can grab the latest version from the [Releases](https://github.com/Gilfaro/ani-sync/releases) page.
 
 Simply download the binary for your operating system, make it executable (on macOS/Linux), and add it to your system's PATH!
 
@@ -104,7 +104,7 @@ How does it compare to other tools like **MAL-Sync**?
 
 - [MyAnimeList (MAL)](https://myanimelist.net)
 - [AniList](https://anilist.co)
-- [Kitsu](https://kitsu.io)
+- [Kitsu](https://kitsu.app)
 - [MangaBaka](https://mangabaka.org)
 
 ---

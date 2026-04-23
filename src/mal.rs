@@ -602,7 +602,7 @@ impl MalOAuth {
 #[async_trait]
 impl OAuthProvider for MalOAuth {
     fn get_auth_url(&self) -> String {
-        let mut url = Url::parse("https://myanimelist.net/v1/oauth2/authorize").unwrap();
+        let mut url = Url::parse(MAL_OAUTH_AUTHORIZE_URL).unwrap();
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", MAL_CLIENT_ID)

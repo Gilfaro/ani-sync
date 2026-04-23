@@ -166,6 +166,7 @@ use sha2::{Digest, Sha256};
 
 pub struct MangaBakaOAuth {
     code_verifier: String,
+    state: String,
 }
 
 impl Default for MangaBakaOAuth {
@@ -178,10 +179,24 @@ impl MangaBakaOAuth {
     #[must_use]
     pub fn new() -> Self {
         let mut rng = rand::rng();
+
         let mut verifier_bytes = [0u8; 96];
         rng.fill_bytes(&mut verifier_bytes);
         let code_verifier = general_purpose::URL_SAFE_NO_PAD.encode(verifier_bytes);
-        Self { code_verifier }
+
+        let mut state_bytes = [0u8; 16];
+        rng.fill_bytes(&mut state_bytes);
+        let state = general_purpose::URL_SAFE_NO_PAD.encode(state_bytes);
+
+        Self {
+            code_verifier,
+            state,
+        }
+    }
+
+    #[must_use]
+    pub fn verify_state(&self, state: &str) -> bool {
+        self.state == state
     }
 }
 
@@ -192,7 +207,7 @@ impl OAuthProvider for MangaBakaOAuth {
         hasher.update(self.code_verifier.as_bytes());
         let code_challenge = general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
 
-        let mut url = url::Url::parse("https://mangabaka.org/auth/oauth2/authorize").unwrap();
+        let mut url = url::Url::parse(MANGABAKA_OAUTH_AUTHORIZE_URL).unwrap();
         url.query_pairs_mut()
             .append_pair("client_id", MANGABAKA_CLIENT_ID)
             .append_pair("response_type", "code")
@@ -202,7 +217,8 @@ impl OAuthProvider for MangaBakaOAuth {
             .append_pair(
                 "scope",
                 "openid profile library.read library.write offline_access",
-            );
+            )
+            .append_pair("state", &self.state);
 
         url.to_string()
     }
@@ -779,5 +795,30 @@ mod tests {
     async fn test_mangabaka_round_trip() {
         let client = MangaBakaClient::new("dummy").unwrap();
         assert_eq!(client.get_round_trip_score(85), 85);
+    }
+
+    #[test]
+    fn test_mangabaka_oauth_state() {
+        let oauth = MangaBakaOAuth::new();
+        let auth_url = oauth.get_auth_url();
+
+        let parsed_url = url::Url::parse(&auth_url).unwrap();
+        let mut state_param = None;
+        for (key, value) in parsed_url.query_pairs() {
+            if key == "state" {
+                state_param = Some(value.into_owned());
+                break;
+            }
+        }
+
+        let state = state_param.expect("auth_url must contain a 'state' parameter");
+        assert!(
+            oauth.verify_state(&state),
+            "verify_state should return true for the generated state"
+        );
+        assert!(
+            !oauth.verify_state("invalid_state"),
+            "verify_state should return false for an invalid state"
+        );
     }
 }
