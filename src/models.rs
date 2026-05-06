@@ -233,7 +233,7 @@ pub trait TrackerClient: Send + Sync {
     ) -> color_eyre::Result<Option<i64>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SyncStatus {
     Current,
@@ -241,6 +241,31 @@ pub enum SyncStatus {
     Paused,
     Dropped,
     Planning,
+}
+
+impl SyncStatus {
+    #[must_use]
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Completed => 5,
+            Self::Current => 4,
+            Self::Paused => 3,
+            Self::Dropped => 2,
+            Self::Planning => 1,
+        }
+    }
+}
+
+impl PartialOrd for SyncStatus {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SyncStatus {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank().cmp(&other.rank())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

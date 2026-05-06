@@ -167,7 +167,7 @@ impl AniListClient {
             "anilist",
             ANILIST_BASE_URL,
             90,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )?);
         Ok(Self {
             client,

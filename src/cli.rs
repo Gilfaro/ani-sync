@@ -41,6 +41,15 @@ pub enum Commands {
             alias = "apply"
         )]
         yes: bool,
+
+        #[arg(
+            long,
+            help = "Prevent overwriting a higher target status/progress with a lower source value"
+        )]
+        no_downgrade: bool,
+
+        #[arg(long, help = "Skip syncing an item if it already exists on the target")]
+        preserve_existing: bool,
     },
     /// Show authentication status for services
     Status,
@@ -80,6 +89,36 @@ mod tests {
             Commands::Sync { source, target, .. } => {
                 assert_eq!(source, Some("mal".to_string()));
                 assert_eq!(target, Some("anilist".to_string()));
+            }
+            _ => panic!("Expected Sync command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_sync_conditional_flags() {
+        let args = vec![
+            "ani_sync",
+            "sync",
+            "-s",
+            "mal",
+            "-t",
+            "anilist",
+            "--no-downgrade",
+            "--preserve-existing",
+        ];
+        let cli = Cli::parse_from(args);
+        match cli.command {
+            Commands::Sync {
+                source,
+                target,
+                no_downgrade,
+                preserve_existing,
+                ..
+            } => {
+                assert_eq!(source, Some("mal".to_string()));
+                assert_eq!(target, Some("anilist".to_string()));
+                assert!(no_downgrade);
+                assert!(preserve_existing);
             }
             _ => panic!("Expected Sync command"),
         }

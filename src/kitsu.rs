@@ -495,11 +495,48 @@ impl TrackerClient for KitsuClient {
             variables.insert("status", serde_json::json!(STATUS_PLANNED));
         }
 
-        if let Some(p) = options.progress {
+        let mut current_progress = options.progress;
+        let mut current_volumes = options.volumes;
+
+        if (current_progress.is_some() || current_volumes.is_some())
+            && let Ok((max_p, max_v)) = self
+                .get_max_progress_and_volumes(entry_id, media_type, options.is_add)
+                .await
+        {
+            if let Some(p) = current_progress
+                && let Some(max_val) = max_p
+                && max_val > 0
+                && p > max_val
+            {
+                tracing::debug!(
+                    "Capping progress for entry {} from {} to {}",
+                    entry_id,
+                    p,
+                    max_val
+                );
+                current_progress = Some(max_val);
+            }
+
+            if let Some(v) = current_volumes
+                && let Some(max_val) = max_v
+                && max_val > 0
+                && v > max_val
+            {
+                tracing::debug!(
+                    "Capping volumes for entry {} from {} to {}",
+                    entry_id,
+                    v,
+                    max_val
+                );
+                current_volumes = Some(max_val);
+            }
+        }
+
+        if let Some(p) = current_progress {
             variables.insert("progress", serde_json::json!(p));
         }
 
-        if let Some(v) = options.volumes {
+        if let Some(v) = current_volumes {
             variables.insert("volumesOwned", serde_json::json!(v));
         }
 
@@ -646,6 +683,75 @@ impl TrackerClient for KitsuClient {
 }
 
 impl KitsuClient {
+    async fn get_max_progress_and_volumes(
+        &self,
+        id: i64,
+        media_type: MediaType,
+        is_add: bool,
+    ) -> Result<(Option<i32>, Option<i32>)> {
+        let query = if is_add {
+            r"
+            query GetMediaMaxProgress($id: ID!) {
+              findAnimeById(id: $id) { episodeCount }
+              findMangaById(id: $id) { chapterCount volumeCount }
+            }
+            "
+        } else {
+            r"
+            query GetLibraryEntryMaxProgress($id: ID!) {
+              findLibraryEntryById(id: $id) {
+                media {
+                  __typename
+                  ... on Anime { episodeCount }
+                  ... on Manga { chapterCount volumeCount }
+                }
+              }
+            }
+            "
+        };
+
+        let mut variables = HashMap::new();
+        variables.insert("id", serde_json::json!(id.to_string()));
+
+        let data = self.query(query, variables).await?;
+
+        let (count_val, vol_val) = if is_add {
+            if media_type == MediaType::Anime {
+                (
+                    data.get("findAnimeById")
+                        .and_then(|node| node.get("episodeCount")),
+                    None,
+                )
+            } else {
+                (
+                    data.get("findMangaById")
+                        .and_then(|node| node.get("chapterCount")),
+                    data.get("findMangaById")
+                        .and_then(|node| node.get("volumeCount")),
+                )
+            }
+        } else {
+            let media = data
+                .get("findLibraryEntryById")
+                .and_then(|node| node.get("media"));
+            (
+                media.and_then(|m| m.get("episodeCount").or_else(|| m.get("chapterCount"))),
+                media.and_then(|m| m.get("volumeCount")),
+            )
+        };
+
+        #[expect(clippy::cast_possible_truncation)]
+        let max_progress = count_val
+            .and_then(serde_json::Value::as_i64)
+            .map(|c| c as i32);
+        #[expect(clippy::cast_possible_truncation)]
+        let max_volumes = vol_val
+            .and_then(serde_json::Value::as_i64)
+            .map(|c| c as i32);
+
+        Ok((max_progress, max_volumes))
+    }
+
     async fn get_media_id_by_external_id(
         &self,
         site: &str,
@@ -850,5 +956,80 @@ mod tests {
         assert_eq!(client.get_round_trip_score(82), 80);
         assert_eq!(client.get_round_trip_score(83), 85);
         assert_eq!(client.get_round_trip_score(0), 0);
+    }
+
+    #[tokio::test]
+    async fn test_kitsu_update_entry_exceeds_max_progress() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock_metadata_response = serde_json::json!({
+            "data": {
+                "findLibraryEntryById": {
+                    "media": {
+                        "__typename": "Anime",
+                        "episodeCount": 12
+                    }
+                }
+            }
+        });
+
+        // The query fetching max progress.
+        let metadata_mock = server
+            .mock("POST", "/")
+            .match_header("content-type", "application/json")
+            .match_header("authorization", "Bearer dummy_token")
+            .match_body(mockito::Matcher::Regex(
+                "GetLibraryEntryMaxProgress".to_string(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_metadata_response.to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mock_update_response = serde_json::json!({
+            "data": {
+                "libraryEntry": {
+                    "update": {
+                        "libraryEntry": {
+                            "id": "100"
+                        },
+                        "errors": []
+                    }
+                }
+            }
+        });
+
+        // The mutation to update library entry should have progress capped at 12.
+        let update_mock = server
+            .mock("POST", "/")
+            .match_header("content-type", "application/json")
+            .match_header("authorization", "Bearer dummy_token")
+            .match_body(mockito::Matcher::Regex("\"progress\":12".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_update_response.to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = KitsuClient::with_base_url(&server.url(), "dummy_token").unwrap();
+
+        let options = UpdateOptions {
+            is_add: false,
+            progress: Some(13), // User watched 13 episodes but Kitsu only has 12
+            ..Default::default()
+        };
+
+        // This will fail because the client won't query max progress or cap it to 12
+        let result =
+            crate::models::TrackerClient::update_entry(&client, 100, MediaType::Anime, options)
+                .await
+                .unwrap();
+
+        assert!(result);
+        metadata_mock.assert_async().await;
+        update_mock.assert_async().await;
     }
 }

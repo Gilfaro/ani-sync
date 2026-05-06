@@ -1,6 +1,12 @@
 use crate::models::{ActionType, DiffField, SyncAction, SyncResult, SyncStatus, TrackerEntry};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SyncConfig {
+    pub preserve_existing: bool,
+    pub no_downgrade: bool,
+}
+
 pub struct SyncManager;
 
 impl SyncManager {
@@ -9,6 +15,7 @@ impl SyncManager {
         source_entries: &Vec<TrackerEntry>,
         target_entries: &Vec<TrackerEntry>,
         target_client: &dyn crate::models::TrackerClient,
+        config: SyncConfig,
     ) -> Vec<SyncResult> {
         let mut results = Vec::new();
 
@@ -68,7 +75,12 @@ impl SyncManager {
             } else {
                 for target_entry in matched_targets {
                     matched_target_ids.insert(target_entry.id);
-                    results.push(Self::compare(source_entry, target_entry, target_client));
+                    results.push(Self::compare(
+                        source_entry,
+                        target_entry,
+                        target_client,
+                        config,
+                    ));
                 }
             }
         }
@@ -105,20 +117,31 @@ impl SyncManager {
 
     /// Compares two tracker entries and returns a `SyncResult`.
     #[must_use]
+    #[expect(clippy::too_many_lines)]
     pub fn compare(
         source: &TrackerEntry,
         target: &TrackerEntry,
         target_client: &dyn crate::models::TrackerClient,
+        config: SyncConfig,
     ) -> SyncResult {
         let mut diffs = Vec::new();
+        let mut is_protected = false;
 
         // 1. Status comparison
-        if source.status != target.status {
+        let skip_status = config.no_downgrade && source.status < target.status;
+        if source.status != target.status && !skip_status {
             diffs.push(DiffField {
                 field_name: "status".to_string(),
                 old_value: serde_json::json!(target.status),
                 new_value: serde_json::json!(source.status),
             });
+        } else if skip_status {
+            is_protected = true;
+            tracing::debug!(
+                "Prevented status downgrade from {:?} to {:?}",
+                target.status,
+                source.status
+            );
         }
 
         // 2. Score comparison
@@ -136,7 +159,16 @@ impl SyncManager {
         let target_maxed = target.max_progress > 0 && target.progress >= target.max_progress;
         let source_maxed = source.max_progress > 0 && source.progress >= source.max_progress;
 
-        if source.status == SyncStatus::Completed && target_maxed {
+        let skip_progress = config.no_downgrade && source.progress < target.progress;
+
+        if skip_progress {
+            is_protected = true;
+            tracing::debug!(
+                "Prevented progress downgrade from {} to {}",
+                target.progress,
+                source.progress
+            );
+        } else if source.status == SyncStatus::Completed && target_maxed {
             // Already maxed out on target, skip
         } else if source.status == SyncStatus::Completed
             && target.status == SyncStatus::Completed
@@ -164,7 +196,16 @@ impl SyncManager {
             let target_maxed_vol = target.max_volumes > 0 && target.volumes >= target.max_volumes;
             let source_maxed_vol = source.max_volumes > 0 && source.volumes >= source.max_volumes;
 
-            if source.status == SyncStatus::Completed && target_maxed_vol {
+            let skip_volumes = config.no_downgrade && source.volumes < target.volumes;
+
+            if skip_volumes {
+                is_protected = true;
+                tracing::debug!(
+                    "Prevented volumes downgrade from {} to {}",
+                    target.volumes,
+                    source.volumes
+                );
+            } else if source.status == SyncStatus::Completed && target_maxed_vol {
                 // Skip
             } else if source.status == SyncStatus::Completed
                 && target.status == SyncStatus::Completed
@@ -189,12 +230,20 @@ impl SyncManager {
         }
 
         // 5. Repeat comparison
-        if source.repeat != target.repeat {
+        let skip_repeat = config.no_downgrade && source.repeat < target.repeat;
+        if source.repeat != target.repeat && !skip_repeat {
             diffs.push(DiffField {
                 field_name: "repeat".to_string(),
                 old_value: serde_json::json!(target.repeat),
                 new_value: serde_json::json!(source.repeat),
             });
+        } else if skip_repeat {
+            is_protected = true;
+            tracing::debug!(
+                "Prevented repeat downgrade from {} to {}",
+                target.repeat,
+                source.repeat
+            );
         }
 
         // 6. Notes comparison
@@ -228,6 +277,14 @@ impl SyncManager {
             });
         }
 
+        if is_protected && diffs.is_empty() {
+            diffs.push(DiffField {
+                field_name: "presence".to_string(),
+                old_value: serde_json::json!("-"),
+                new_value: serde_json::json!("Downgrade Prevented"),
+            });
+        }
+
         SyncResult {
             source_entry: Some(source.clone()),
             target_entry: Some(target.clone()),
@@ -242,6 +299,7 @@ impl SyncManager {
         target_name: &str,
         sync_result: &SyncResult,
         target_supported_ids: Option<Vec<&str>>,
+        config: SyncConfig,
     ) -> Option<SyncAction> {
         let default_ids = vec!["mal_id", "ani_id", "kitsu_id"];
         let supported_ids = target_supported_ids.unwrap_or(default_ids);
@@ -281,6 +339,19 @@ impl SyncManager {
                     old_value: serde_json::json!("-"),
                     new_value: serde_json::json!(format!("Will add to {}", target_name)),
                 }];
+            } else if config.preserve_existing {
+                action = ActionType::Skip;
+                diffs = vec![DiffField {
+                    field_name: "presence".to_string(),
+                    old_value: serde_json::json!("-"),
+                    new_value: serde_json::json!("Preserved existing target"),
+                }];
+            } else if config.no_downgrade
+                && diffs.len() == 1
+                && diffs[0].field_name == "presence"
+                && diffs[0].new_value == "Downgrade Prevented"
+            {
+                action = ActionType::Skip;
             } else if !sync_result.is_in_sync {
                 action = ActionType::Update;
             }
@@ -500,7 +571,7 @@ mod tests {
         let target = dummy_entry();
         let client = MockClient;
 
-        let result = SyncManager::compare(&source, &target, &client);
+        let result = SyncManager::compare(&source, &target, &client, SyncConfig::default());
         assert!(!result.is_in_sync);
         assert_eq!(result.diff.len(), 1);
         assert_eq!(result.diff[0].field_name, "progress");
@@ -516,11 +587,11 @@ mod tests {
         target.status = SyncStatus::Planning;
         let client = MockClient;
 
-        let result = SyncManager::compare(&source, &target, &client);
+        let result = SyncManager::compare(&source, &target, &client, SyncConfig::default());
         assert!(!result.is_in_sync);
 
         // Reverse should also NOT be in sync since equality is symmetric
-        let result_reverse = SyncManager::compare(&target, &source, &client);
+        let result_reverse = SyncManager::compare(&target, &source, &client, SyncConfig::default());
         assert!(!result_reverse.is_in_sync);
     }
 
@@ -537,7 +608,12 @@ mod tests {
         target.title = "Target Title".to_string(); // Different title
 
         let client = MockClient;
-        let results = SyncManager::compare_lists(&vec![source], &vec![target], &client);
+        let results = SyncManager::compare_lists(
+            &vec![source],
+            &vec![target],
+            &client,
+            SyncConfig::default(),
+        );
         assert_eq!(results.len(), 1);
         assert!(results[0].target_entry.is_some());
         assert_eq!(
@@ -552,7 +628,8 @@ mod tests {
         source.mal_id = Some(12345);
 
         let client = MockClient;
-        let results = SyncManager::compare_lists(&vec![source], &vec![], &client);
+        let results =
+            SyncManager::compare_lists(&vec![source], &vec![], &client, SyncConfig::default());
         assert_eq!(results.len(), 1);
         assert!(results[0].target_entry.is_none());
         assert_eq!(results[0].diff[0].field_name, "presence");
@@ -590,11 +667,99 @@ mod tests {
             }],
         };
 
-        let action =
-            SyncManager::generate_actions("source", "target", &result, Some(vec!["mal_id"]))
-                .unwrap();
+        let action = SyncManager::generate_actions(
+            "source",
+            "target",
+            &result,
+            Some(vec!["mal_id"]),
+            SyncConfig::default(),
+        )
+        .unwrap();
 
         assert_eq!(action.action, ActionType::Skip);
+    }
+
+    #[test]
+    fn test_sync_manager_no_downgrade() {
+        let mut source = dummy_entry();
+        source.status = SyncStatus::Planning;
+        source.progress = 5;
+        source.volumes = 1;
+        source.repeat = 0;
+        source.media_type = MediaType::Manga;
+
+        let mut target = dummy_entry();
+        target.status = SyncStatus::Completed;
+        target.progress = 10;
+        target.volumes = 5;
+        target.repeat = 2;
+        target.media_type = MediaType::Manga;
+
+        let client = MockClient;
+        let config = SyncConfig {
+            preserve_existing: false,
+            no_downgrade: true,
+        };
+
+        // All of these should be skipped due to no_downgrade
+        let result = SyncManager::compare(&source, &target, &client, config);
+
+        assert!(!result.diff.iter().any(|r| r.field_name == "status"
+            || r.field_name == "progress"
+            || r.field_name == "volumes"
+            || r.field_name == "repeat"));
+    }
+    #[test]
+    fn test_sync_manager_generate_preserve_existing_skip_action() {
+        let entry = TrackerEntry {
+            id: 1,
+            mal_id: Some(12345),
+            ani_id: None,
+            kitsu_id: None,
+            title: "Existing Anime".to_string(),
+            media_type: crate::models::MediaType::Anime,
+            status: SyncStatus::Current,
+            score: 80,
+            progress: 5,
+            max_progress: 12,
+            volumes: 0,
+            max_volumes: 0,
+            started_at: None,
+            completed_at: None,
+            repeat: 0,
+            notes: String::new(),
+        };
+
+        let result = SyncResult {
+            source_entry: Some(entry.clone()),
+            target_entry: Some(entry),
+            is_in_sync: false,
+            diff: vec![DiffField {
+                field_name: "progress".to_string(),
+                old_value: serde_json::json!(5),
+                new_value: serde_json::json!(6),
+            }],
+        };
+
+        let config = SyncConfig {
+            preserve_existing: true,
+            no_downgrade: false,
+        };
+
+        let action = SyncManager::generate_actions(
+            "source",
+            "target",
+            &result,
+            Some(vec!["mal_id"]),
+            config,
+        )
+        .unwrap();
+
+        assert_eq!(action.action, ActionType::Skip);
+        assert_eq!(
+            action.reasons[0].new_value,
+            serde_json::json!("Preserved existing target")
+        );
     }
 
     #[test]
@@ -670,7 +835,7 @@ mod tests {
         target.score = 10; // Kitsu score (which is 2/20 * 5)
 
         let client = RoundingMock;
-        let result = SyncManager::compare(&source, &target, &client);
+        let result = SyncManager::compare(&source, &target, &client, SyncConfig::default());
 
         // Even though 9 != 10, when 9 is "round-tripped" through Kitsu it becomes 10.
         // So they should be considered in sync.
@@ -751,7 +916,7 @@ mod tests {
         target.score = 80;
 
         let client = RoundingMock;
-        let result = SyncManager::compare(&source, &target, &client);
+        let result = SyncManager::compare(&source, &target, &client, SyncConfig::default());
 
         assert!(!result.is_in_sync);
         assert!(
@@ -763,7 +928,8 @@ mod tests {
 
         let mut target_zero = dummy_entry();
         target_zero.score = 0;
-        let result_zero = SyncManager::compare(&source, &target_zero, &client);
+        let result_zero =
+            SyncManager::compare(&source, &target_zero, &client, SyncConfig::default());
         assert!(result_zero.is_in_sync);
         assert!(result_zero.diff.is_empty());
     }

@@ -345,7 +345,7 @@ impl MangaBakaClient {
             "mangabaka",
             MANGABAKA_BASE_URL,
             30,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )?);
         let access_token_arc = Arc::new(RwLock::new(access_token.to_string()));
 

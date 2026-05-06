@@ -229,6 +229,8 @@ async fn main() -> Result<()> {
             manga,
             no_manga,
             yes,
+            no_downgrade,
+            preserve_existing,
         } => {
             let config = load_config();
             let source_svc = source
@@ -324,6 +326,11 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
 
+            let sync_config = sync::SyncConfig {
+                preserve_existing: *preserve_existing,
+                no_downgrade: *no_downgrade,
+            };
+
             let source_viewer_name = source_client.get_viewer_name().await?;
             let target_viewer_name = target_client.get_viewer_name().await?;
 
@@ -353,6 +360,7 @@ async fn main() -> Result<()> {
                     &source_anime,
                     &target_anime,
                     target_client.as_ref(),
+                    sync_config,
                 );
                 for res in results_anime {
                     if let Some(action) = sync::SyncManager::generate_actions(
@@ -360,6 +368,7 @@ async fn main() -> Result<()> {
                         &target_svc,
                         &res,
                         Some(target_client.supported_ids()),
+                        sync_config,
                     ) {
                         sync_actions.push(action);
                     }
@@ -377,6 +386,7 @@ async fn main() -> Result<()> {
                     &source_manga,
                     &target_manga,
                     target_client.as_ref(),
+                    sync_config,
                 );
                 for res in results_manga {
                     if let Some(action) = sync::SyncManager::generate_actions(
@@ -384,6 +394,7 @@ async fn main() -> Result<()> {
                         &target_svc,
                         &res,
                         Some(target_client.supported_ids()),
+                        sync_config,
                     ) {
                         sync_actions.push(action);
                     }
@@ -411,7 +422,13 @@ async fn main() -> Result<()> {
 
             let error_skips: Vec<_> = skips
                 .into_iter()
-                .filter(|s| s.reasons.iter().any(|r| r.field_name != "status"))
+                .filter(|s| {
+                    s.reasons.iter().any(|r| r.field_name != "status")
+                        || s.reasons.iter().any(|r| {
+                            r.new_value == "Downgrade Prevented"
+                                || r.new_value == "Preserved existing target"
+                        })
+                })
                 .collect();
 
             render_action_table("SKIPPED", &error_skips, AnsiColors::Red);
