@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-02-21
+
 use ani_sync::anilist;
 use ani_sync::auth;
 use ani_sync::cli::{AuthProvider, Cli, Commands};
@@ -16,8 +18,8 @@ use clap::Parser;
 use color_eyre::Result;
 use owo_colors::AnsiColors;
 use serde::Deserialize;
-use std::fs;
 use std::io::{self, Write};
+use tracing::{Level, event};
 
 #[derive(Deserialize, Default)]
 struct Config {
@@ -30,7 +32,7 @@ struct Config {
 fn load_config() -> Config {
     let mut path = std::env::current_dir().unwrap_or_default();
     path.push("config.json");
-    if let Ok(content) = fs::read_to_string(path)
+    if let Ok(content) = std::fs::read_to_string(path)
         && let Ok(config) = serde_json::from_str(&content)
     {
         return config;
@@ -68,7 +70,7 @@ async fn main() -> Result<()> {
     match &cli.command {
         Commands::Auth { provider } => match provider {
             AuthProvider::Mal => {
-                print_info("Initiating MyAnimeList authentication flow...");
+                print_info("Initiating `MyAnimeList` authentication flow...");
                 let oauth = mal::MalOAuth::new();
                 let url = oauth.get_auth_url();
                 print_info(&format!("Please visit: {url}"));
@@ -92,7 +94,7 @@ async fn main() -> Result<()> {
 
                         if let Some(code) = query.get("code") {
                             if oauth.exchange_token(code).await.is_ok() {
-                                print_success("MyAnimeList authorization successful!");
+                                print_success("`MyAnimeList` authorization successful!");
                             } else {
                                 print_error("Failed to exchange token.");
                             }
@@ -103,7 +105,7 @@ async fn main() -> Result<()> {
                 }
             }
             AuthProvider::Anilist => {
-                print_info("Initiating AniList authentication flow...");
+                print_info("Initiating `AniList` authentication flow...");
                 let oauth = anilist::AniListOAuth;
                 let url = oauth.get_auth_url();
                 print_info(&format!("Please visit: {url}"));
@@ -116,7 +118,7 @@ async fn main() -> Result<()> {
                             parsed_url.query_pairs().into_owned().collect();
                         if let Some(fragment) = query.get("forwarded_fragment") {
                             if oauth.exchange_token(fragment).await.is_ok() {
-                                print_success("AniList authorization successful!");
+                                print_success("`AniList` authorization successful!");
                             } else {
                                 print_error("Failed to extract token.");
                             }
@@ -127,7 +129,7 @@ async fn main() -> Result<()> {
                 }
             }
             AuthProvider::Kitsu => {
-                print_info("--- Kitsu Login ---");
+                print_info("--- `Kitsu` Login ---");
                 print_info(
                     "Disclaimer: Your email and password are used ONLY for this initial token exchange and are NOT saved.",
                 );
@@ -166,7 +168,7 @@ async fn main() -> Result<()> {
                             if let Ok(json) = response.json::<serde_json::Value>().await
                                 && let Some(token) = json["access_token"].as_str()
                             {
-                                let bundle = crate::storage::TokenBundle {
+                                let bundle = ani_sync::storage::TokenBundle {
                                     access_token: token.to_string(),
                                     refresh_token: json["refresh_token"]
                                         .as_str()
@@ -176,7 +178,7 @@ async fn main() -> Result<()> {
                                         .and_then(|c| json["expires_in"].as_i64().map(|e| c + e)),
                                 };
                                 storage::set_token_bundle("kitsu", &bundle).unwrap();
-                                print_success("Kitsu authorization successful!");
+                                print_success("`Kitsu` authorization successful!");
                             }
                         } else {
                             print_error(&format!("Authentication failed: {}", response.status()));
@@ -186,7 +188,7 @@ async fn main() -> Result<()> {
                 }
             }
             AuthProvider::Mangabaka => {
-                print_info("MangaBaka auth not fully implemented via CLI yet.");
+                print_info("`MangaBaka` auth not fully implemented via CLI yet.");
                 let oauth = mangabaka::MangaBakaOAuth::new();
                 let url = oauth.get_auth_url();
                 print_info(&format!("Please visit: {url}"));
@@ -210,7 +212,7 @@ async fn main() -> Result<()> {
 
                         if let Some(code) = query.get("code") {
                             if oauth.exchange_token(code).await.is_ok() {
-                                print_success("MangaBaka authorization successful!");
+                                print_success("`MangaBaka` authorization successful!");
                             } else {
                                 print_error("Failed to exchange token.");
                             }
@@ -461,7 +463,13 @@ async fn main() -> Result<()> {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(e) => {
-                    tracing::error!("Error retrieving MAL token bundle: {:?}", e);
+                    event!(
+                        name: "main.status.mal_error",
+                        Level::ERROR,
+                        error = ?e,
+                        "Error retrieving `MyAnimeList` token bundle: {:?}",
+                        e
+                    );
                     false
                 }
             };
@@ -469,7 +477,13 @@ async fn main() -> Result<()> {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(e) => {
-                    tracing::error!("Error retrieving AniList token bundle: {:?}", e);
+                    event!(
+                        name: "main.status.anilist_error",
+                        Level::ERROR,
+                        error = ?e,
+                        "Error retrieving `AniList` token bundle: {:?}",
+                        e
+                    );
                     false
                 }
             };
@@ -477,7 +491,13 @@ async fn main() -> Result<()> {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(e) => {
-                    tracing::error!("Error retrieving Kitsu token bundle: {:?}", e);
+                    event!(
+                        name: "main.status.kitsu_error",
+                        Level::ERROR,
+                        error = ?e,
+                        "Error retrieving `Kitsu` token bundle: {:?}",
+                        e
+                    );
                     false
                 }
             };
@@ -485,13 +505,19 @@ async fn main() -> Result<()> {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(e) => {
-                    tracing::error!("Error retrieving MangaBaka token bundle: {:?}", e);
+                    event!(
+                        name: "main.status.mangabaka_error",
+                        Level::ERROR,
+                        error = ?e,
+                        "Error retrieving `MangaBaka` token bundle: {:?}",
+                        e
+                    );
                     false
                 }
             };
 
             print_info(&format!(
-                "MyAnimeList: {}",
+                "`MyAnimeList`: {}",
                 if mal_status {
                     "Authenticated"
                 } else {
@@ -499,7 +525,7 @@ async fn main() -> Result<()> {
                 }
             ));
             print_info(&format!(
-                "AniList: {}",
+                "`AniList`: {}",
                 if anilist_status {
                     "Authenticated"
                 } else {
@@ -507,7 +533,7 @@ async fn main() -> Result<()> {
                 }
             ));
             print_info(&format!(
-                "Kitsu: {}",
+                "`Kitsu`: {}",
                 if kitsu_status {
                     "Authenticated"
                 } else {
@@ -515,7 +541,7 @@ async fn main() -> Result<()> {
                 }
             ));
             print_info(&format!(
-                "MangaBaka: {}",
+                "`MangaBaka`: {}",
                 if mangabaka_status {
                     "Authenticated"
                 } else {

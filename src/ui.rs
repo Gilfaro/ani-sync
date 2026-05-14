@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-02-21
+
 use crate::models::{MediaType, SyncAction, TrackerEntry};
 use anstream::{eprintln, println};
 use owo_colors::{AnsiColors, OwoColorize};
@@ -5,6 +7,7 @@ use tabled::settings::{Alignment, Modify, Style, Width, object::Rows, peaker::Pr
 use tabled::{Table, Tabled};
 use terminal_size::{Width as TerminalWidth, terminal_size};
 
+/// Prints a success message with a checkmark.
 pub fn print_success(msg: &str) {
     println!(
         "{} {}",
@@ -13,6 +16,7 @@ pub fn print_success(msg: &str) {
     );
 }
 
+/// Prints an error message with a cross.
 pub fn print_error(msg: &str) {
     eprintln!(
         "{} {}",
@@ -21,6 +25,7 @@ pub fn print_error(msg: &str) {
     );
 }
 
+/// Prints a warning message with a warning sign.
 pub fn print_warning(msg: &str) {
     println!(
         "{} {}",
@@ -29,6 +34,7 @@ pub fn print_warning(msg: &str) {
     );
 }
 
+/// Prints an informational message with an info sign.
 pub fn print_info(msg: &str) {
     println!(
         "{} {}",
@@ -37,6 +43,7 @@ pub fn print_info(msg: &str) {
     );
 }
 
+/// Formats the external IDs of a tracker entry for display.
 #[must_use]
 pub fn format_ids(entry: &TrackerEntry) -> String {
     let mal_id = entry
@@ -297,6 +304,7 @@ pub fn render_update_action_table(title: &str, actions: &[&SyncAction], theme_co
     println!("{}", format!("\n=== {title} ===").color(theme_color).bold());
     println!("{table}");
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,20 +1,44 @@
+// Rust guideline compliant 2026-02-21
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Options for updating an entry on a tracker.
+///
+/// This struct encapsulates all possible fields that can be updated during a
+/// synchronization operation.
 #[derive(Debug, Default, Clone)]
 pub struct UpdateOptions {
+    /// The new status of the entry.
     pub status: Option<SyncStatus>,
+    /// The new score of the entry (0-100).
     pub score: Option<i32>,
+    /// The current episode/chapter progress.
     pub progress: Option<i32>,
+    /// The current volume progress (for manga).
     pub volumes: Option<i32>,
+    /// The start date of the media.
     pub started_at: Option<HashMap<String, Option<i64>>>,
+    /// The completion date of the media.
     pub completed_at: Option<HashMap<String, Option<i64>>>,
+    /// The number of times the media has been rewatched/reread.
     pub repeat: Option<i32>,
+    /// Personal notes for the entry.
     pub notes: Option<String>,
+    /// Whether this is a new entry being added.
     pub is_add: bool,
 }
 
 impl UpdateOptions {
+    /// Creates a new `UpdateOptions` with default values.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Parses a date string into a structured format.
+    ///
+    /// The input string is expected to be in ISO 8601 format (e.g., "2023-04-14T00:00:00Z").
     #[must_use]
     pub fn parse_date(date_str: Option<&String>) -> Option<HashMap<String, Option<i64>>> {
         date_str.and_then(|ds| {
@@ -35,6 +59,9 @@ impl UpdateOptions {
         })
     }
 
+    /// Formats a structured date into a string.
+    ///
+    /// The output string is in "YYYY-MM-DD" format.
     #[must_use]
     pub fn format_date(date: &Option<HashMap<String, Option<i64>>>) -> Option<String> {
         if let Some(date_map) = date
@@ -59,6 +86,7 @@ impl UpdateOptions {
         date.cloned()
     }
 
+    /// Creates `UpdateOptions` from a `SyncAction`.
     #[must_use]
     #[expect(clippy::too_many_lines)]
     pub fn from_sync_action(action: &SyncAction) -> Self {
@@ -193,39 +221,92 @@ impl UpdateOptions {
     }
 }
 
+/// A client for interacting with an anime/manga tracker.
 #[async_trait::async_trait]
 pub trait TrackerClient: Send + Sync {
+    /// Returns the list of external source IDs supported by this tracker.
     fn supported_ids(&self) -> Vec<&'static str>;
+    /// Returns whether this tracker supports anime.
     fn supports_anime(&self) -> bool;
+    /// Returns whether this tracker supports manga.
     fn supports_manga(&self) -> bool;
 
     /// Converts an internal 100-scale score to the tracker's native scale, then back to 100-scale.
+    ///
     /// This simulates how the tracker will interpret and save the score.
     fn get_round_trip_score(&self, internal_score: i32) -> i32;
 
+    /// Returns the current viewer's username.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn get_viewer_name(&self) -> color_eyre::Result<String>;
+
+    /// Returns the current viewer's unique identifier.
+    ///
+    /// Defaults to `get_viewer_name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn get_viewer_id(&self) -> color_eyre::Result<String> {
         self.get_viewer_name().await
     }
+
+    /// Fetches the user's anime list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn fetch_anime_list(&self, user_name: &str) -> color_eyre::Result<Vec<TrackerEntry>>;
+
+    /// Fetches the user's manga list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn fetch_manga_list(&self, user_name: &str) -> color_eyre::Result<Vec<TrackerEntry>>;
 
+    /// Updates or adds an entry on the tracker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn update_entry(
         &self,
         entry_id: i64,
         media_type: MediaType,
         options: UpdateOptions,
     ) -> color_eyre::Result<bool>;
+
+    /// Resolves a media ID on the tracker using its `MyAnimeList` ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn get_media_id_by_mal_id(
         &self,
         mal_id: i64,
         media_type: MediaType,
     ) -> color_eyre::Result<Option<i64>>;
+
+    /// Resolves a media ID on the tracker using its `AniList` ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn get_media_id_by_ani_id(
         &self,
         ani_id: i64,
         media_type: MediaType,
     ) -> color_eyre::Result<Option<i64>>;
+
+    /// Resolves a media ID on the tracker using its Kitsu ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
     async fn get_media_id_by_kitsu_id(
         &self,
         kitsu_id: i64,
@@ -233,17 +314,24 @@ pub trait TrackerClient: Send + Sync {
     ) -> color_eyre::Result<Option<i64>>;
 }
 
+/// The status of an entry in a user's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SyncStatus {
+    /// Currently watching/reading.
     Current,
+    /// Finished watching/reading.
     Completed,
+    /// On hold.
     Paused,
+    /// Stopped watching/reading.
     Dropped,
+    /// Planning to watch/read.
     Planning,
 }
 
 impl SyncStatus {
+    /// Returns a numeric rank for comparing statuses.
     #[must_use]
     pub fn rank(&self) -> u8 {
         match self {
@@ -268,72 +356,114 @@ impl Ord for SyncStatus {
     }
 }
 
+/// The type of media (Anime or Manga).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MediaType {
+    /// Animation.
     Anime,
+    /// Comics/Graphic novels.
     Manga,
 }
 
+/// A normalized entry from a tracker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrackerEntry {
+    /// Internal ID on the tracker.
     pub id: i64,
+    /// `MyAnimeList` ID.
     pub mal_id: Option<i64>,
+    /// `AniList` ID.
     pub ani_id: Option<i64>,
+    /// Kitsu ID.
     pub kitsu_id: Option<i64>,
+    /// The primary title of the media.
     pub title: String,
+    /// The type of media.
     pub media_type: MediaType,
+    /// The user's status for this entry.
     pub status: SyncStatus,
+    /// The user's score (0-100).
     pub score: i32,
+    /// Current episode/chapter progress.
     pub progress: i32,
+    /// Current volume progress (for manga).
     #[serde(default)]
     pub volumes: i32,
+    /// The start date of the media.
     #[serde(default)]
     pub started_at: Option<HashMap<String, Option<i64>>>,
+    /// The completion date of the media.
     #[serde(default)]
     pub completed_at: Option<HashMap<String, Option<i64>>>,
+    /// Number of times rewatched/reread.
     #[serde(default)]
     pub repeat: i32,
+    /// Personal notes.
     #[serde(default)]
     pub notes: String,
+    /// Total episodes/chapters available.
     #[serde(default)]
     pub max_progress: i32,
+    /// Total volumes available.
     #[serde(default)]
     pub max_volumes: i32,
 }
 
+/// Represents a change in a specific field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiffField {
+    /// Name of the field.
     pub field_name: String,
+    /// Value before the change.
     pub old_value: serde_json::Value,
+    /// Value after the change.
     pub new_value: serde_json::Value,
 }
 
+/// The result of a synchronization comparison.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncResult {
+    /// Entry from the source tracker.
     pub source_entry: Option<TrackerEntry>,
+    /// Entry from the target tracker.
     pub target_entry: Option<TrackerEntry>,
+    /// Whether the two entries are currently in sync.
     pub is_in_sync: bool,
+    /// List of differences found.
     pub diff: Vec<DiffField>,
 }
 
+/// The type of action to perform during synchronization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ActionType {
+    /// Add a new entry to the target tracker.
     Add,
+    /// Update an existing entry on the target tracker.
     Update,
+    /// No changes needed.
     Skip,
+    /// Remove an entry (not currently implemented/used for safety).
     Delete,
 }
 
+/// A planned synchronization action.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncAction {
+    /// The type of action to perform.
     pub action: ActionType,
+    /// Name of the source tracker.
     pub source: String,
+    /// Name of the target tracker.
     pub target: String,
+    /// The type of media.
     pub media_type: MediaType,
+    /// The source entry.
     pub source_entry: Option<TrackerEntry>,
+    /// The target entry.
     pub target_entry: Option<TrackerEntry>,
+    /// Reasons for the action (list of differences).
     #[serde(default)]
     pub reasons: Vec<DiffField>,
 }

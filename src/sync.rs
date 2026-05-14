@@ -1,19 +1,28 @@
+// Rust guideline compliant 2026-02-21
+
 use crate::models::{ActionType, DiffField, SyncAction, SyncResult, SyncStatus, TrackerEntry};
 use std::collections::{HashMap, HashSet};
+use tracing::{Level, event};
 
+/// Configuration for the synchronization process.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SyncConfig {
+    /// If true, existing entries on the target will not be updated.
     pub preserve_existing: bool,
+    /// If true, downgrades in status or progress will be prevented.
     pub no_downgrade: bool,
 }
 
+/// A manager for comparing and executing synchronization between trackers.
 pub struct SyncManager;
 
 impl SyncManager {
-    /// Compares two lists of entries and returns a list of differences.
+    /// This function performs a fuzzy match between source and target entries
+    /// using available external IDs (`MAL`, `AniList`, `Kitsu`).
+    #[must_use]
     pub fn compare_lists(
-        source_entries: &Vec<TrackerEntry>,
-        target_entries: &Vec<TrackerEntry>,
+        source_entries: &[TrackerEntry],
+        target_entries: &[TrackerEntry],
         target_client: &dyn crate::models::TrackerClient,
         config: SyncConfig,
     ) -> Vec<SyncResult> {
@@ -94,7 +103,7 @@ impl SyncManager {
                     is_in_sync: false,
                     diff: vec![DiffField {
                         field_name: "presence".to_string(),
-                        old_value: serde_json::Value::Null,
+                        old_value: serde_json::json!("-"),
                         new_value: serde_json::json!("Source"),
                     }],
                 });
@@ -116,6 +125,9 @@ impl SyncManager {
     }
 
     /// Compares two tracker entries and returns a `SyncResult`.
+    ///
+    /// This function checks for differences in status, score, progress, volumes,
+    /// repeats, notes, and dates.
     #[must_use]
     #[expect(clippy::too_many_lines)]
     pub fn compare(
@@ -137,8 +149,14 @@ impl SyncManager {
             });
         } else if skip_status {
             is_protected = true;
-            tracing::debug!(
-                "Prevented status downgrade from {:?} to {:?}",
+            event!(
+                name: "sync.compare.status_downgrade_prevented",
+                Level::DEBUG,
+                title = source.title,
+                target_status = ?target.status,
+                source_status = ?source.status,
+                "Prevented status downgrade for {}: from {:?} to {:?}",
+                source.title,
                 target.status,
                 source.status
             );
@@ -163,8 +181,14 @@ impl SyncManager {
 
         if skip_progress {
             is_protected = true;
-            tracing::debug!(
-                "Prevented progress downgrade from {} to {}",
+            event!(
+                name: "sync.compare.progress_downgrade_prevented",
+                Level::DEBUG,
+                title = source.title,
+                target_progress = target.progress,
+                source_progress = source.progress,
+                "Prevented progress downgrade for {}: from {} to {}",
+                source.title,
                 target.progress,
                 source.progress
             );
@@ -200,8 +224,14 @@ impl SyncManager {
 
             if skip_volumes {
                 is_protected = true;
-                tracing::debug!(
-                    "Prevented volumes downgrade from {} to {}",
+                event!(
+                    name: "sync.compare.volumes_downgrade_prevented",
+                    Level::DEBUG,
+                    title = source.title,
+                    target_volumes = target.volumes,
+                    source_volumes = source.volumes,
+                    "Prevented volumes downgrade for {}: from {} to {}",
+                    source.title,
                     target.volumes,
                     source.volumes
                 );
@@ -239,8 +269,14 @@ impl SyncManager {
             });
         } else if skip_repeat {
             is_protected = true;
-            tracing::debug!(
-                "Prevented repeat downgrade from {} to {}",
+            event!(
+                name: "sync.compare.repeat_downgrade_prevented",
+                Level::DEBUG,
+                title = source.title,
+                target_repeat = target.repeat,
+                source_repeat = source.repeat,
+                "Prevented repeat downgrade for {}: from {} to {}",
+                source.title,
                 target.repeat,
                 source.repeat
             );
@@ -293,6 +329,10 @@ impl SyncManager {
         }
     }
 
+    /// Generates a list of `SyncAction`s from a `SyncResult`.
+    ///
+    /// This function determines whether to Add, Update, or Skip based on the
+    /// comparison results and the provided configuration.
     #[must_use]
     pub fn generate_actions(
         source_name: &str,
@@ -336,7 +376,7 @@ impl SyncManager {
                 action = ActionType::Add;
                 diffs = vec![DiffField {
                     field_name: "presence".to_string(),
-                    old_value: serde_json::json!("-"),
+                    old_value: serde_json::Value::Null,
                     new_value: serde_json::json!(format!("Will add to {}", target_name)),
                 }];
             } else if config.preserve_existing {
@@ -439,7 +479,13 @@ impl SyncManager {
 
             // Kitsu specific fix: Updates require the library entry ID, not the media ID.
             if action.target == "kitsu" && action.action == ActionType::Update {
-                entry_id = Some(action.target_entry.as_ref().unwrap().id);
+                entry_id = Some(
+                    action
+                        .target_entry
+                        .as_ref()
+                        .expect("target_entry should exist for Update")
+                        .id,
+                );
             }
 
             let Some(entry_id) = entry_id else {
@@ -453,12 +499,22 @@ impl SyncManager {
             let update_options = UpdateOptions::from_sync_action(&action);
 
             if action.action == ActionType::Add {
-                tracing::debug!(
-                    "Preparing to ADD entry to {}. Using resolved media ID: {}",
+                event!(
+                    name: "sync.execute.add_entry",
+                    Level::DEBUG,
+                    target = action.target,
+                    resolved_id = entry_id,
+                    "Preparing to ADD entry to {}: resolved media ID {}",
                     action.target,
                     entry_id
                 );
-                tracing::debug!("UpdateOptions payload: {:#?}", update_options);
+                event!(
+                    name: "sync.execute.payload",
+                    Level::DEBUG,
+                    payload = ?update_options,
+                    "UpdateOptions payload: {:?}",
+                    update_options
+                );
             }
 
             // Perform the update
@@ -608,12 +664,8 @@ mod tests {
         target.title = "Target Title".to_string(); // Different title
 
         let client = MockClient;
-        let results = SyncManager::compare_lists(
-            &vec![source],
-            &vec![target],
-            &client,
-            SyncConfig::default(),
-        );
+        let results =
+            SyncManager::compare_lists(&[source], &[target], &client, SyncConfig::default());
         assert_eq!(results.len(), 1);
         assert!(results[0].target_entry.is_some());
         assert_eq!(
@@ -628,8 +680,7 @@ mod tests {
         source.mal_id = Some(12345);
 
         let client = MockClient;
-        let results =
-            SyncManager::compare_lists(&vec![source], &vec![], &client, SyncConfig::default());
+        let results = SyncManager::compare_lists(&[source], &[], &client, SyncConfig::default());
         assert_eq!(results.len(), 1);
         assert!(results[0].target_entry.is_none());
         assert_eq!(results[0].diff[0].field_name, "presence");
@@ -662,7 +713,7 @@ mod tests {
             is_in_sync: false,
             diff: vec![DiffField {
                 field_name: "presence".to_string(),
-                old_value: serde_json::Value::Null,
+                old_value: serde_json::json!("-"),
                 new_value: serde_json::json!("Target"),
             }],
         };

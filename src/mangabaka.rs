@@ -1,15 +1,27 @@
-use crate::client::BaseClient;
+// Rust guideline compliant 2026-02-21
+
+use crate::client::{BaseClient, OAuthProvider, TokenRefresher};
 use crate::models::{MediaType, SyncStatus, TrackerClient, TrackerEntry, UpdateOptions};
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose};
 use color_eyre::{Result, eyre::eyre};
+use rand::Rng;
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
+use tracing::{Level, event};
 
+/// Base URL for the `MangaBaka` API.
 pub const MANGABAKA_BASE_URL: &str = "https://api.mangabaka.dev";
+/// Client ID for the Ani-Sync application on `MangaBaka`.
 pub const MANGABAKA_CLIENT_ID: &str = "dhFSCMtpNCDkJLdpJcyGEMleMWkMoGOw";
+/// URL for redirecting users to authorize via OAuth 2.0.
 pub const MANGABAKA_OAUTH_AUTHORIZE_URL: &str = "https://mangabaka.org/auth/oauth2/authorize";
+/// URL for exchanging and refreshing tokens via OAuth 2.0.
 pub const MANGABAKA_OAUTH_TOKEN_URL: &str = "https://mangabaka.org/auth/oauth2/token";
 
 /// Helper to deserialize strings or integers into an `Option<i32>`.
@@ -100,70 +112,92 @@ where
     deserializer.deserialize_any(StringOrI32)
 }
 
+/// Metadata for a series on `MangaBaka`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaSeries {
+    /// Internal series ID.
     pub id: Option<i64>,
+    /// Primary title.
     pub title: Option<String>,
+    /// Romanized title.
     pub romanized_title: Option<String>,
+    /// Total chapters available.
     #[serde(default, deserialize_with = "deserialize_string_or_i32")]
     pub total_chapters: Option<i32>,
+    /// Final volume number.
     #[serde(default, deserialize_with = "deserialize_string_or_i32")]
     pub final_volume: Option<i32>,
+    /// External source mappings.
     pub source: Option<MangaBakaSource>,
 }
 
+/// External source mappings for a series on `MangaBaka`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaSource {
+    /// `MyAnimeList` ID mapping.
     pub my_anime_list: Option<MangaBakaExternalId>,
+    /// `AniList` ID mapping.
     pub anilist: Option<MangaBakaExternalId>,
+    /// Kitsu ID mapping.
     pub kitsu: Option<MangaBakaExternalId>,
 }
 
+/// An external ID mapping on `MangaBaka`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaExternalId {
+    /// The external ID.
     pub id: Option<i64>,
 }
 
+/// A library item entry on `MangaBaka`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaLibraryItem {
+    /// The user's status for the series (e.g., "reading").
     pub state: Option<String>,
+    /// The user's rating.
     #[serde(default, deserialize_with = "deserialize_string_or_i32")]
     pub rating: Option<i32>,
+    /// Current chapter progress.
     #[serde(default, deserialize_with = "deserialize_string_or_i32")]
     pub progress_chapter: Option<i32>,
+    /// Current volume progress.
     #[serde(default, deserialize_with = "deserialize_string_or_i32")]
     pub progress_volume: Option<i32>,
+    /// When the user started the series.
     pub start_date: Option<String>,
+    /// When the user finished the series.
     pub finish_date: Option<String>,
+    /// User notes.
     pub note: Option<String>,
+    /// Associated series metadata.
     #[serde(rename = "Series")]
     pub series: MangaBakaSeries,
 }
 
+/// Pagination metadata for `MangaBaka` library responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaPagination {
+    /// URL for the next page of results.
     pub next: Option<String>,
 }
 
+/// Response from the `MangaBaka` library endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MangaBakaLibraryResponse {
+    /// The list of library items.
     pub data: Vec<MangaBakaLibraryItem>,
+    /// Pagination information.
     pub pagination: Option<MangaBakaPagination>,
 }
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
+/// A client for the `MangaBaka` API.
 pub struct MangaBakaClient {
+    /// The underlying HTTP client.
     pub client: Arc<BaseClient>,
     access_token: Arc<RwLock<String>>,
 }
 
-use crate::client::OAuthProvider;
-use base64::{Engine as _, engine::general_purpose};
-use rand::Rng;
-use sha2::{Digest, Sha256};
-
+/// OAuth 2.0 provider for `MangaBaka` using PKCE.
 pub struct MangaBakaOAuth {
     code_verifier: String,
     state: String,
@@ -176,6 +210,7 @@ impl Default for MangaBakaOAuth {
 }
 
 impl MangaBakaOAuth {
+    /// Creates a new `MangaBakaOAuth` with random PKCE verifier and state.
     #[must_use]
     pub fn new() -> Self {
         let mut rng = rand::rng();
@@ -194,6 +229,7 @@ impl MangaBakaOAuth {
         }
     }
 
+    /// Verifies that the returned state matches the generated state.
     #[must_use]
     pub fn verify_state(&self, state: &str) -> bool {
         self.state == state
@@ -202,6 +238,7 @@ impl MangaBakaOAuth {
 
 #[async_trait]
 impl OAuthProvider for MangaBakaOAuth {
+    /// Returns the `MangaBaka` authorization URL with PKCE challenge.
     fn get_auth_url(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.code_verifier.as_bytes());
@@ -223,6 +260,11 @@ impl OAuthProvider for MangaBakaOAuth {
         url.to_string()
     }
 
+    /// Exchanges the authorization code for an access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the exchange fails or the response is invalid.
     async fn exchange_token(&self, code: &str) -> Result<()> {
         let client = crate::client::create_reqwest_client()?;
         let mut data = HashMap::new();
@@ -247,9 +289,14 @@ impl OAuthProvider for MangaBakaOAuth {
                         .get("refresh_token")
                         .and_then(serde_json::Value::as_str)
                         .map(ToString::to_string),
-                    expires_at: None, // Simplified for brevity
+                    expires_at: None,
                 };
                 crate::storage::set_token_bundle("mangabaka", &bundle)?;
+                event!(
+                    name: "mangabaka.auth.token_exchanged",
+                    Level::INFO,
+                    "Successfully exchanged token for `MangaBaka`",
+                );
             } else {
                 return Err(eyre!("No access_token found in response"));
             }
@@ -259,6 +306,11 @@ impl OAuthProvider for MangaBakaOAuth {
         }
     }
 
+    /// Refreshes the `MangaBaka` access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the refresh fails or the response is invalid.
     async fn refresh_token(&self, refresh_token: &str) -> Result<()> {
         let client = crate::client::create_reqwest_client()?;
         let mut data = HashMap::new();
@@ -284,6 +336,11 @@ impl OAuthProvider for MangaBakaOAuth {
                     expires_at: None,
                 };
                 crate::storage::set_token_bundle("mangabaka", &bundle)?;
+                event!(
+                    name: "mangabaka.auth.token_refreshed",
+                    Level::INFO,
+                    "Successfully refreshed token for `MangaBaka`",
+                );
             } else {
                 return Err(eyre!("No access_token found in response"));
             }
@@ -294,15 +351,25 @@ impl OAuthProvider for MangaBakaOAuth {
     }
 }
 
+/// A token refresher for `MangaBaka`.
 pub struct MangaBakaTokenRefresher {
+    /// The OAuth provider used for refreshing.
     pub oauth: MangaBakaOAuth,
 }
 
 #[async_trait]
-impl crate::client::TokenRefresher for MangaBakaTokenRefresher {
+impl TokenRefresher for MangaBakaTokenRefresher {
+    /// Refreshes the `MangaBaka` access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No token bundle is found in storage.
+    /// - No refresh token is available in the bundle.
+    /// - The refresh request fails.
     async fn refresh(&self) -> Result<String> {
         let bundle = crate::storage::get_token_bundle("mangabaka")?
-            .ok_or_else(|| eyre!("No token bundle found for MangaBaka"))?;
+            .ok_or_else(|| eyre!("No token bundle found for `MangaBaka`"))?;
 
         let refresh_token = bundle
             .refresh_token
@@ -312,19 +379,25 @@ impl crate::client::TokenRefresher for MangaBakaTokenRefresher {
         self.oauth.refresh_token(refresh_token).await?;
 
         let new_bundle = crate::storage::get_token_bundle("mangabaka")?
-            .ok_or_else(|| eyre!("No token bundle found after MangaBaka refresh"))?;
+            .ok_or_else(|| eyre!("No token bundle found after `MangaBaka` refresh"))?;
 
         Ok(new_bundle.access_token)
     }
 }
 
+/// A wrapper around `MangaBakaTokenRefresher` that updates the client's local access token.
 pub struct MangaBakaClientRefresher {
     inner: MangaBakaTokenRefresher,
     access_token: Arc<RwLock<String>>,
 }
 
 #[async_trait]
-impl crate::client::TokenRefresher for MangaBakaClientRefresher {
+impl TokenRefresher for MangaBakaClientRefresher {
+    /// Refreshes the token and updates the local cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the inner refresh fails.
     async fn refresh(&self) -> Result<String> {
         let new_token = self.inner.refresh().await?;
         let mut lock = self.access_token.write().await;
@@ -403,7 +476,7 @@ impl MangaBakaClient {
     }
 
     fn parse_date(date_str: Option<&String>) -> Option<HashMap<String, Option<i64>>> {
-        crate::models::UpdateOptions::parse_date(date_str)
+        UpdateOptions::parse_date(date_str)
     }
 
     /// Gets the media ID for a series given an external source and its ID.
@@ -453,17 +526,7 @@ impl MangaBakaClient {
 
 #[async_trait]
 impl TrackerClient for MangaBakaClient {
-    /// Gets the viewer's name from MangaBaka.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the profile data cannot be parsed.
-    /// Gets the viewer's name from MangaBaka.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the profile data cannot be parsed.
-    /// Gets the viewer's name from MangaBaka.
+    /// Gets the viewer's name from `MangaBaka`.
     ///
     /// # Errors
     ///
@@ -497,7 +560,7 @@ impl TrackerClient for MangaBakaClient {
         }
 
         Err(eyre!(
-            "Could not extract viewer name from MangaBaka profile"
+            "Could not extract viewer name from `MangaBaka` profile"
         ))
     }
 
@@ -512,14 +575,14 @@ impl TrackerClient for MangaBakaClient {
     }
 
     fn get_round_trip_score(&self, internal_score: i32) -> i32 {
-        internal_score // MangaBaka is 1:1
+        internal_score // `MangaBaka` is 1:1
     }
 
     async fn fetch_anime_list(&self, _user_name: &str) -> Result<Vec<TrackerEntry>> {
         Ok(vec![])
     }
 
-    /// Fetches the user's manga library.
+    /// Fetches the user's manga library from `MangaBaka`.
     ///
     /// # Errors
     ///
@@ -576,7 +639,7 @@ impl TrackerClient for MangaBakaClient {
                     max_volumes: series.final_volume.unwrap_or(0),
                     started_at,
                     completed_at,
-                    repeat: 0, // MangaBaka doesn't seem to expose repeat count in library
+                    repeat: 0, // `MangaBaka` doesn't seem to expose repeat count in library
                     notes: item.note.unwrap_or_default(),
                 });
             }
@@ -594,7 +657,7 @@ impl TrackerClient for MangaBakaClient {
         Ok(all_entries)
     }
 
-    /// Updates an entry in the user's library.
+    /// Updates or adds a manga entry in the user's `MangaBaka` library.
     ///
     /// # Errors
     ///
@@ -637,7 +700,7 @@ impl TrackerClient for MangaBakaClient {
         }
 
         let map_date = |d: &Option<HashMap<String, Option<i64>>>| -> serde_json::Value {
-            if let Some(date_str) = crate::models::UpdateOptions::format_date(d) {
+            if let Some(date_str) = UpdateOptions::format_date(d) {
                 serde_json::json!(date_str)
             } else {
                 serde_json::Value::Null
@@ -776,7 +839,6 @@ mod tests {
             }
         }"#;
 
-        // This should fail currently because progress_chapter and rating are strings
         let parsed: Result<MangaBakaLibraryResponse, _> = serde_json::from_str(json_data);
         assert!(
             parsed.is_ok(),

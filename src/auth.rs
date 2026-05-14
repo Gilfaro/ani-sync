@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-02-21
+
 use axum::{
     Router,
     extract::{Query, State},
@@ -14,13 +16,25 @@ type SharedSender = Arc<Mutex<Option<oneshot::Sender<String>>>>;
 
 /// Captures an OAuth callback by starting a temporary local server.
 ///
+/// This function binds to a local port and waits for an incoming GET request
+/// (usually from a browser redirect) that contains the OAuth authorization code
+/// or other relevant query parameters.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let callback_url = capture_oauth_callback(9145).await?;
+/// ```
+///
 /// # Errors
 ///
-/// Returns an error if the server fails to bind to the port or if the callback is not received.
+/// Returns an error if:
+/// - The server fails to bind to the specified port.
+/// - The callback is not received (e.g., the channel is closed).
 ///
 /// # Panics
 ///
-/// Panics if the server fails to start.
+/// This function may panic if the `axum` server fails to start after binding.
 pub async fn capture_oauth_callback(port: u16) -> Result<String> {
     let (tx, rx) = oneshot::channel::<String>();
     let tx = Arc::new(Mutex::new(Some(tx)));
@@ -41,7 +55,7 @@ pub async fn capture_oauth_callback(port: u16) -> Result<String> {
                 let _ = shutdown_rx.await;
             })
             .await
-            .unwrap();
+            .expect("axum server should start successfully");
     });
 
     let callback_url = rx.await?;

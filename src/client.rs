@@ -1,15 +1,29 @@
+// Rust guideline compliant 2026-02-21
+
 use async_trait::async_trait;
 use color_eyre::Result;
 use reqwest::{Client, Method, Response, header::HeaderMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tracing::{error, warn};
+use tracing::{Level, event};
 
+/// A provider for OAuth 2.0 authentication.
 #[async_trait]
 pub trait OAuthProvider: Send + Sync {
+    /// Returns the URL to redirect the user to for authorization.
     fn get_auth_url(&self) -> String;
+    /// Exchanges an authorization code for an access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the exchange fails.
     async fn exchange_token(&self, code: &str) -> Result<()>;
+    /// Refreshes an access token using a refresh token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the refresh fails.
     async fn refresh_token(&self, refresh_token: &str) -> Result<()>;
 }
 
@@ -30,19 +44,32 @@ pub fn create_reqwest_client() -> Result<Client> {
         .build()?)
 }
 
+/// A trait for types that can refresh an access token.
 #[async_trait]
 pub trait TokenRefresher: Send + Sync {
+    /// Refreshes the token and returns the new access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the refresh fails.
     async fn refresh(&self) -> Result<String>;
 }
 
+/// A base HTTP client with rate limiting and automatic token refresh.
 pub struct BaseClient {
+    /// The name of the service (used for logging).
     pub name: String,
+    /// The base URL for all requests.
     pub base_url: String,
+    /// The maximum number of calls allowed in the rate limit period.
     pub rate_limit_calls: u32,
+    /// The period for the rate limit.
     pub rate_limit_period: Duration,
+    /// The minimum interval between requests.
     pub min_interval: Duration,
     client: Client,
     next_available_time: Mutex<Instant>,
+    /// An optional refresher for automatic token updates.
     pub refresher: Mutex<Option<Arc<dyn TokenRefresher>>>,
     refresh_lock: Mutex<()>,
 }
@@ -79,6 +106,7 @@ impl BaseClient {
         })
     }
 
+    /// Sets the token refresher for this client.
     pub async fn set_refresher(&self, refresher: Arc<dyn TokenRefresher>) {
         let mut r = self.refresher.lock().await;
         *r = Some(refresher);
@@ -116,9 +144,14 @@ impl BaseClient {
             && let Ok(r) = r_str.parse::<u32>()
             && r < 5
         {
-            warn!(
-                "[Rate Limit] Only {} requests remaining for {}, slowing down...",
-                r, self.name
+            event!(
+                name: "client.ratelimit.warning",
+                Level::WARN,
+                service = self.name,
+                remaining = r,
+                "Only {} requests remaining for {}, slowing down...",
+                r,
+                self.name
             );
             tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -174,8 +207,13 @@ impl BaseClient {
                         };
 
                         let delay = std::cmp::max(delay, Duration::from_secs(5));
-                        warn!(
-                            "[Rate Limit] HTTP 429 hit! Sleeping for {:?} (Attempt {}/{})",
+                        event!(
+                            name: "client.ratelimit.hit",
+                            Level::WARN,
+                            service = self.name,
+                            attempt = attempt + 1,
+                            delay = ?delay,
+                            "HTTP 429 hit! Sleeping for {:?} (Attempt {}/{})",
                             delay,
                             attempt + 1,
                             max_retries
@@ -216,7 +254,15 @@ impl BaseClient {
                                     return Ok(retry_res.error_for_status()?);
                                 }
                                 Err(e) => {
-                                    error!("Token refresh failed: {e}");
+                                    event!(
+                                        name: "client.auth.refresh_failed",
+                                        Level::ERROR,
+                                        service = self.name,
+                                        error = %e,
+                                        "Token refresh failed for {}: {}",
+                                        self.name,
+                                        e
+                                    );
                                     return Err(e);
                                 }
                             }
@@ -236,9 +282,16 @@ impl BaseClient {
                         return Err(e.into());
                     }
                     let delay = base_delay * 2_u32.pow(attempt);
-                    error!(
-                        "[Request Error] {} hit! Retrying in {:?} (Attempt {}/{})",
+                    event!(
+                        name: "client.request.error",
+                        Level::ERROR,
+                        service = self.name,
+                        error = %e,
+                        attempt = attempt + 1,
+                        delay = ?delay,
+                        "[Request Error] {} hit for {}! Retrying in {:?} (Attempt {}/{})",
                         e,
+                        self.name,
                         delay,
                         attempt + 1,
                         max_retries
@@ -306,6 +359,19 @@ impl BaseClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_base_client_init() {
+        let client = BaseClient::new(
+            "test",
+            "https://api.example.com/",
+            5,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://api.example.com"); // Tests trailing slash removal
+        assert_eq!(client.rate_limit_calls, 5);
+    }
+
     #[tokio::test]
     async fn test_base_client_rate_limiting_spacing() {
         // 10 calls per 1 second = 100ms interval
@@ -324,7 +390,6 @@ mod tests {
         client.wait_for_token().await;
         let elapsed = start.elapsed();
 
-        // With current implementation, this will be ~0ms because it starts with 10 tokens.
         // With even spacing, this should be at least 200ms (2 intervals).
         assert!(
             elapsed >= Duration::from_millis(200),

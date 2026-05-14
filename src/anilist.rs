@@ -1,11 +1,16 @@
+// Rust guideline compliant 2026-02-21
+
 use crate::client::{BaseClient, OAuthProvider};
-use crate::models::{MediaType, SyncStatus, TrackerClient, TrackerEntry};
+use crate::models::{MediaType, SyncStatus, TrackerClient, TrackerEntry, UpdateOptions};
 use async_trait::async_trait;
 use color_eyre::{Result, eyre::eyre};
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
+use tracing::{Level, event};
 
 const ANILIST_CLIENT_ID: &str = "38728";
 const ANILIST_BASE_URL: &str = "https://graphql.anilist.co";
@@ -85,54 +90,87 @@ mutation (
 }
 ";
 
+/// Represents a media title in various languages/formats on `AniList`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AniListTitle {
+    /// Title in romaji.
     pub romaji: Option<String>,
+    /// Title in English.
     pub english: Option<String>,
+    /// Native language title.
     pub native: Option<String>,
 }
 
+/// Cover image URLs for a media entry on `AniList`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AniListCoverImage {
+    /// Medium size cover image URL.
     pub medium: Option<String>,
+    /// Large size cover image URL.
     pub large: Option<String>,
 }
 
+/// Metadata for a media entry on `AniList`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AniListMedia {
+    /// Internal `AniList` ID.
     pub id: i64,
+    /// `MyAnimeList` ID mapping.
     pub id_mal: Option<i64>,
+    /// Media type (ANIME or MANGA).
     pub r#type: Option<String>,
+    /// Titles for the media.
     pub title: AniListTitle,
+    /// Cover images for the media.
     pub cover_image: Option<AniListCoverImage>,
+    /// Total episodes (for anime).
     pub episodes: Option<i32>,
+    /// Total chapters (for manga).
     pub chapters: Option<i32>,
+    /// Total volumes (for manga).
     pub volumes: Option<i32>,
 }
 
+/// A fuzzy date representation used by the `AniList` API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AniListFuzzyDate {
+    /// The year.
     pub year: Option<i32>,
+    /// The month.
     pub month: Option<i32>,
+    /// The day.
     pub day: Option<i32>,
 }
 
+/// An individual entry in a user's media list on `AniList`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AniListEntry {
+    /// The entry's unique ID.
     pub id: i64,
+    /// The associated media metadata.
     pub media: AniListMedia,
+    /// The user's status for this entry.
     pub status: String,
+    /// The user's score.
     pub score: i32,
+    /// Current episode/chapter progress.
     pub progress: i32,
+    /// Current volume progress (for manga).
     pub progress_volumes: Option<i32>,
+    /// Last update timestamp.
     pub updated_at: Option<i64>,
+    /// When the user started the media.
     pub started_at: Option<AniListFuzzyDate>,
+    /// When the user completed the media.
     pub completed_at: Option<AniListFuzzyDate>,
+    /// Rewatch/reread count.
     pub repeat: Option<i32>,
+    /// Personal notes.
     pub notes: Option<String>,
+    /// Whether the entry is private.
     pub private: Option<bool>,
 }
 
@@ -148,10 +186,9 @@ struct GraphQLResponse {
     errors: Option<Vec<serde_json::Value>>,
 }
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
+/// A client for the `AniList` GraphQL API.
 pub struct AniListClient {
+    /// The underlying HTTP client.
     pub client: Arc<BaseClient>,
     access_token: Arc<RwLock<String>>,
 }
@@ -242,25 +279,6 @@ impl AniListClient {
                     Err(eyre!("HTTP Error {status}: {body_text}"))
                 }
             }
-        }
-    }
-
-    /// Get the current viewer's name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query fails or the response is invalid.
-    pub async fn get_viewer_name(&self) -> Result<String> {
-        let query = "query { Viewer { name } }";
-        let data = self.query(query, HashMap::new()).await?;
-        if let Some(name) = data
-            .get("Viewer")
-            .and_then(|v| v.get("name"))
-            .and_then(|n| n.as_str())
-        {
-            Ok(name.to_string())
-        } else {
-            Err(eyre!("Failed to get Viewer name"))
         }
     }
 
@@ -388,6 +406,11 @@ impl AniListClient {
 
 #[async_trait]
 impl TrackerClient for AniListClient {
+    /// Get the current viewer's name from `AniList`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the response is invalid.
     async fn get_viewer_name(&self) -> Result<String> {
         let query = "query { Viewer { name } }";
         let data = self.query(query, HashMap::new()).await?;
@@ -413,7 +436,7 @@ impl TrackerClient for AniListClient {
     }
 
     fn get_round_trip_score(&self, internal_score: i32) -> i32 {
-        internal_score // AniList POINT_100 is 1:1
+        internal_score // `AniList` POINT_100 is 1:1
     }
 
     async fn fetch_anime_list(&self, user_name: &str) -> Result<Vec<TrackerEntry>> {
@@ -423,11 +446,12 @@ impl TrackerClient for AniListClient {
     async fn fetch_manga_list(&self, user_name: &str) -> Result<Vec<TrackerEntry>> {
         self.fetch_list(user_name, MediaType::Manga).await
     }
+
     async fn update_entry(
         &self,
         entry_id: i64,
         _media_type: MediaType,
-        options: crate::models::UpdateOptions,
+        options: UpdateOptions,
     ) -> Result<bool> {
         const STATUS_CURRENT: &str = "CURRENT";
         const STATUS_COMPLETED: &str = "COMPLETED";
@@ -561,16 +585,23 @@ impl TrackerClient for AniListClient {
     }
 }
 
+/// OAuth 2.0 provider for `AniList`.
 pub struct AniListOAuth;
 
 #[async_trait]
 impl OAuthProvider for AniListOAuth {
+    /// Returns the `AniList` authorization URL.
     fn get_auth_url(&self) -> String {
         format!("{ANILIST_OAUTH_AUTHORIZE_URL}?client_id={ANILIST_CLIENT_ID}&response_type=token")
     }
 
+    /// Exchanges the implicit grant fragment for an access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the access token is missing from the fragment.
     async fn exchange_token(&self, code: &str) -> Result<()> {
-        // AniList uses implicit grant. The token is sent back in the hash fragment.
+        // `AniList` uses implicit grant. The token is sent back in the hash fragment.
         // The callback server script extracts the fragment and forwards it as a query param `forwarded_fragment`.
         // `code` here will actually be the full `forwarded_fragment` value like `access_token=123&...`
         let parsed = url::form_urlencoded::parse(code.as_bytes())
@@ -584,17 +615,27 @@ impl OAuthProvider for AniListOAuth {
                 expires_at: None,
             };
             crate::storage::set_token_bundle("anilist", &bundle)?;
+            event!(
+                name: "anilist.auth.success",
+                Level::INFO,
+                "Successfully exchanged token for `AniList`",
+            );
             Ok(())
         } else {
             Err(eyre!(
-                "No access_token found in AniList implicit grant response fragment."
+                "No access_token found in `AniList` implicit grant response fragment."
             ))
         }
     }
 
+    /// Token refresh is not supported for `AniList` implicit grant.
+    ///
+    /// # Errors
+    ///
+    /// Always returns an error as `AniList` implicit grant does not provide refresh tokens.
     async fn refresh_token(&self, _refresh_token: &str) -> Result<()> {
         Err(eyre!(
-            "AniList Implicit Grant does not provide refresh tokens."
+            "`AniList` Implicit Grant does not provide refresh tokens."
         ))
     }
 }
