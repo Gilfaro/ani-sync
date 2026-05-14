@@ -340,7 +340,6 @@ impl MangaBakaClient {
     ///
     /// Returns an error if the base client cannot be initialized.
     pub fn new(access_token: &str) -> Result<Self> {
-        // 30 requests per minute = 1 call every 2 seconds
         let client = Arc::new(BaseClient::new(
             "mangabaka",
             MANGABAKA_BASE_URL,
@@ -531,7 +530,7 @@ impl TrackerClient for MangaBakaClient {
     /// Panics if the pagination URL is malformed.
     async fn fetch_manga_list(&self, _user_id: &str) -> Result<Vec<TrackerEntry>> {
         let mut all_entries = Vec::new();
-        let mut next_url = Some("/v1/my/library?limit=50".to_string());
+        let mut next_url = Some("/v1/my/library?limit=100".to_string());
 
         let mut headers = header::HeaderMap::new();
         headers.insert(

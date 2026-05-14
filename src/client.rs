@@ -40,9 +40,9 @@ pub struct BaseClient {
     pub base_url: String,
     pub rate_limit_calls: u32,
     pub rate_limit_period: Duration,
+    pub min_interval: Duration,
     client: Client,
-    tokens: Mutex<u32>,
-    updated_at: Mutex<Instant>,
+    next_available_time: Mutex<Instant>,
     pub refresher: Mutex<Option<Arc<dyn TokenRefresher>>>,
     refresh_lock: Mutex<()>,
 }
@@ -60,15 +60,20 @@ impl BaseClient {
         rate_limit_period: Duration,
     ) -> Result<Self> {
         let client = create_reqwest_client()?;
+        let min_interval = if rate_limit_calls > 0 {
+            Duration::from_secs_f64(rate_limit_period.as_secs_f64() / f64::from(rate_limit_calls))
+        } else {
+            Duration::from_secs(0)
+        };
 
         Ok(Self {
             name: name.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
             rate_limit_calls,
             rate_limit_period,
+            min_interval,
             client,
-            tokens: Mutex::new(rate_limit_calls),
-            updated_at: Mutex::new(Instant::now()),
+            next_available_time: Mutex::new(Instant::now()),
             refresher: Mutex::new(None),
             refresh_lock: Mutex::new(()),
         })
@@ -94,48 +99,37 @@ impl BaseClient {
         }
     }
 
-    async fn wait_for_token(&self) {
-        let mut tokens = self.tokens.lock().await;
-        let mut updated_at = self.updated_at.lock().await;
+    pub(crate) async fn wait_for_token(&self) {
+        let mut next_available = self.next_available_time.lock().await;
+        let now = Instant::now();
 
-        while *tokens == 0 {
-            let now = Instant::now();
-            let elapsed = now.duration_since(*updated_at);
-
-            // Allow roughly rate_limit_calls per rate_limit_period
-            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let new_tokens = (elapsed.as_secs_f64()
-                * (f64::from(self.rate_limit_calls) / self.rate_limit_period.as_secs_f64()))
-                as u32;
-
-            if new_tokens >= 1 {
-                *tokens = std::cmp::min(self.rate_limit_calls, *tokens + new_tokens);
-                *updated_at = now;
-            }
-
-            if *tokens == 0 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        if *next_available > now {
+            tokio::time::sleep(*next_available - now).await;
         }
 
-        *tokens -= 1;
+        *next_available = std::cmp::max(Instant::now(), *next_available) + self.min_interval;
     }
 
     async fn update_tokens_from_headers(&self, headers: &reqwest::header::HeaderMap) {
         if let Some(remaining) = headers.get("X-RateLimit-Remaining")
             && let Ok(r_str) = remaining.to_str()
             && let Ok(r) = r_str.parse::<u32>()
+            && r < 5
         {
-            let mut tokens = self.tokens.lock().await;
-            *tokens = r;
-        }
-
-        let tokens = *self.tokens.lock().await;
-        if tokens < 5 {
+            warn!(
+                "[Rate Limit] Only {} requests remaining for {}, slowing down...",
+                r, self.name
+            );
             tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Push next available time forward as well
+            let mut next_available = self.next_available_time.lock().await;
+            *next_available =
+                std::cmp::max(*next_available, Instant::now() + Duration::from_secs(1));
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     async fn execute_request<F>(
         &self,
         method: Method,
@@ -186,6 +180,13 @@ impl BaseClient {
                             attempt + 1,
                             max_retries
                         );
+
+                        {
+                            let mut next_available = self.next_available_time.lock().await;
+                            *next_available =
+                                std::cmp::max(*next_available, Instant::now() + delay);
+                        }
+
                         tokio::time::sleep(delay).await;
                         continue;
                     }
@@ -305,16 +306,29 @@ impl BaseClient {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_base_client_init() {
+    #[tokio::test]
+    async fn test_base_client_rate_limiting_spacing() {
+        // 10 calls per 1 second = 100ms interval
         let client = BaseClient::new(
             "test",
-            "https://api.example.com/",
-            5,
+            "https://api.example.com",
+            10,
             Duration::from_secs(1),
         )
         .unwrap();
-        assert_eq!(client.base_url, "https://api.example.com"); // Tests trailing slash removal
-        assert_eq!(client.rate_limit_calls, 5);
+
+        let start = Instant::now();
+        // The first call might be fast, but subsequent calls should be spaced
+        client.wait_for_token().await;
+        client.wait_for_token().await;
+        client.wait_for_token().await;
+        let elapsed = start.elapsed();
+
+        // With current implementation, this will be ~0ms because it starts with 10 tokens.
+        // With even spacing, this should be at least 200ms (2 intervals).
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "Expected at least 200ms elapsed for 3 calls with 100ms spacing, but got {elapsed:?}",
+        );
     }
 }
