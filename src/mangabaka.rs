@@ -23,6 +23,8 @@ pub const MANGABAKA_CLIENT_ID: &str = "dhFSCMtpNCDkJLdpJcyGEMleMWkMoGOw";
 pub const MANGABAKA_OAUTH_AUTHORIZE_URL: &str = "https://mangabaka.org/auth/oauth2/authorize";
 /// URL for exchanging and refreshing tokens via OAuth 2.0.
 pub const MANGABAKA_OAUTH_TOKEN_URL: &str = "https://mangabaka.org/auth/oauth2/token";
+/// The maximum number of items to fetch per page from the `MangaBaka` library.
+const MANGABAKA_LIBRARY_LIMIT: i32 = 100;
 
 /// Helper to deserialize strings or integers into an `Option<i32>`.
 ///
@@ -593,7 +595,7 @@ impl TrackerClient for MangaBakaClient {
     /// Panics if the pagination URL is malformed.
     async fn fetch_manga_list(&self, _user_id: &str) -> Result<Vec<TrackerEntry>> {
         let mut all_entries = Vec::new();
-        let mut next_url = Some("/v1/my/library?limit=100".to_string());
+        let mut next_url = Some(format!("/v1/my/library?limit={MANGABAKA_LIBRARY_LIMIT}"));
 
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -645,7 +647,24 @@ impl TrackerClient for MangaBakaClient {
             }
 
             next_url = data.pagination.and_then(|p| p.next).and_then(|n| {
-                if let Ok(parsed) = url::Url::parse(&n) {
+                if let Ok(mut parsed) = url::Url::parse(&n) {
+                    // Force limit to MANGABAKA_LIBRARY_LIMIT to ensure we make the minimum number of calls
+                    let mut query_params: Vec<(String, String)> =
+                        parsed.query_pairs().into_owned().collect();
+                    if let Some(limit_pos) = query_params.iter().position(|(k, _)| k == "limit") {
+                        query_params[limit_pos].1 = MANGABAKA_LIBRARY_LIMIT.to_string();
+                    } else {
+                        query_params
+                            .push(("limit".to_string(), MANGABAKA_LIBRARY_LIMIT.to_string()));
+                    }
+
+                    parsed.set_query(None);
+                    let mut query_serializer = parsed.query_pairs_mut();
+                    for (k, v) in query_params {
+                        query_serializer.append_pair(&k, &v);
+                    }
+                    drop(query_serializer);
+
                     let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
                     Some(format!("{}{}", parsed.path(), query))
                 } else {

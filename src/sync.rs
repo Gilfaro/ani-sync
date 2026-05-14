@@ -77,7 +77,7 @@ impl SyncManager {
                     is_in_sync: false,
                     diff: vec![DiffField {
                         field_name: "presence".to_string(),
-                        old_value: serde_json::Value::Null,
+                        old_value: serde_json::json!("-"),
                         new_value: serde_json::json!("Target"),
                     }],
                 });
@@ -376,7 +376,7 @@ impl SyncManager {
                 action = ActionType::Add;
                 diffs = vec![DiffField {
                     field_name: "presence".to_string(),
-                    old_value: serde_json::Value::Null,
+                    old_value: serde_json::json!("-"),
                     new_value: serde_json::json!(format!("Will add to {}", target_name)),
                 }];
             } else if config.preserve_existing {
